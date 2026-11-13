@@ -101,11 +101,16 @@ RUN_BUDGET_SECONDS = 300
 CHALLENGE_SUFFIX = "glados-observe-v1"
 CHALLENGE_DELAY_SECONDS = 2.7
 
-"""Cloudflare 校验偶发失败（code=5，服务端明示 please retry）的重试等待（秒）"""
+"""Cloudflare 校验失败（code=5，服务端明示 please retry）的重试等待（秒）"""
 CF_RETRY_DELAY_SECONDS = 5.0
 
-"""Cloudflare 校验失败后的最大重试次数（单次预算 300s 内可承受）"""
-CF_RETRY_TIMES = 2
+"""Cloudflare 校验失败后的最大重试次数。
+
+code=5 现已确认由服务端强制下发的 Turnstile 人机验证引起（challenge 含
+turnstile sitekey），纯 HTTP 客户端无法完成，重试不会改变结果，故设为 0。
+保留开关以便未来服务端恢复无验证challenge时无需改代码即可启用。
+"""
+CF_RETRY_TIMES = 0
 
 """Cookie 中标识登录态的会话字段"""
 SESSION_FIELDS = ("koa:sess=", "gld:sess=")
@@ -671,6 +676,19 @@ def log_reject(code: int, raw: Dict, message: str, domain: str, log: Callable[..
         log(
             LogEmoji.ERROR,
             f"无权限(code=-2)：Cookie 可能已失效，请重新登录 {domain} 刷新 Cookie 并更新仓库 Secret GLADOS_COOKIES",
+            True,
+        )
+    elif code == 5 or "turnstile" in str(raw.get("reason", "")).lower():
+        log(
+            LogEmoji.ERROR,
+            "服务端要求 Cloudflare Turnstile 人机验证(code=5)：当前出口 IP 被判定需人工验证，"
+            "纯 HTTP 脚本无法生成 turnstile token，Cookie 与请求头均非问题所在",
+            True,
+        )
+        log(
+            LogEmoji.INFO,
+            "建议：改用已登录的浏览器手动签到，或安装支持 Turnstile 的浏览器扩展类签到工具；"
+            "GitHub Actions 机房 IP 无法通过此校验",
             True,
         )
     else:
