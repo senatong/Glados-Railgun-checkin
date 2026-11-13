@@ -101,6 +101,12 @@ RUN_BUDGET_SECONDS = 300
 CHALLENGE_SUFFIX = "glados-observe-v1"
 CHALLENGE_DELAY_SECONDS = 2.7
 
+"""Cloudflare 校验偶发失败（code=5，服务端明示 please retry）的重试等待（秒）"""
+CF_RETRY_DELAY_SECONDS = 5.0
+
+"""Cloudflare 校验失败后的最大重试次数（单次预算 300s 内可承受）"""
+CF_RETRY_TIMES = 2
+
 """Cookie 中标识登录态的会话字段"""
 SESSION_FIELDS = ("koa:sess=", "gld:sess=")
 
@@ -803,11 +809,32 @@ class API:
     def _is_device_mismatch(raw: Optional[Dict]) -> bool:
         return isinstance(raw, dict) and raw.get("code") == 4 and raw.get("reason") == "device-mismatch"
 
+    @staticmethod
+    def _is_cf_verification_retryable(raw: Optional[Dict]) -> bool:
+        """服务端 code=5 且提示重试：Cloudflare 校验偶发失败，重新领 challenge 再试有意义。"""
+        return (
+            isinstance(raw, dict)
+            and raw.get("code") == 5
+            and "retry" in str(raw.get("message", "")).lower()
+        )
+
     @safe_call(default=lambda e: CheckinResult())
     def checkin(self) -> CheckinResult:
         """执行签到。未指定 user-agent 时，设备不匹配会按 loginDevice 自适应重试一次。"""
         raw = self._checkin_attempt(self.headers["user-agent"])
         hint = ""
+
+        # Cloudflare 校验偶发失败（code=5，服务端明示 please retry）：等待后重新领 challenge 重试
+        for attempt in range(1, CF_RETRY_TIMES + 1):
+            if not self._is_cf_verification_retryable(raw):
+                break
+            self.log(
+                LogEmoji.WARNING,
+                f"Cloudflare 校验失败（code=5），{CF_RETRY_DELAY_SECONDS:.0f}s 后重试（第 {attempt}/{CF_RETRY_TIMES} 次）",
+                force=True,
+            )
+            time.sleep(CF_RETRY_DELAY_SECONDS)
+            raw = self._checkin_attempt(self.headers["user-agent"])
 
         if self._is_device_mismatch(raw):
             device = raw.get("loginDevice")
