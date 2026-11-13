@@ -1033,8 +1033,13 @@ class API:
         snippet = "（HTML 响应，已省略）" if is_html else body[:300] + ("..." if len(body) > 300 else "")
         self.log(LogEmoji.WARNING, f"向 {url} 请求失败，状态码 {status}。响应: {snippet}", force=True)
 
-    def _checkin_challenge(self, user_agent: str) -> Optional[Tuple[str, str]]:
-        """获取签到 challenge 并计算 proof；失败返回 None，由调用方回退旧协议。"""
+    def _checkin_challenge(self, user_agent: str) -> Optional[Tuple[str, str, str]]:
+        """获取签到 challenge 并计算 proof；失败返回 None，由调用方回退旧协议。
+
+        返回 (nonce, proof, tsState)。服务端在 challenge 中下发 turnstile 时
+        要求浏览器完成 Cloudflare 人机验证，纯 HTTP 客户端只能通过如实上报
+        tsState 让服务端给出明确诊断，无法伪造 token。
+        """
         response = self.request("GET", APIEndpoint.CHECKIN_CHALLENGE, user_agent=user_agent)
         if response is None:
             return None
@@ -1052,19 +1057,33 @@ class API:
             self.log(LogEmoji.WARNING, "签到 challenge 缺少 nonce，按旧协议提交", force=True)
             return None
 
+        # 与网页前端一致：turnstile 关闭时上报 off；下发时无法在脚本里完成人机验证
+        turnstile_key = data.get("turnstile")
+        if turnstile_key:
+            self.log(
+                LogEmoji.WARNING,
+                "服务端要求 Cloudflare Turnstile 人机验证（challenge 含 sitekey），"
+                "纯 HTTP 客户端无法生成 turnstile token；本次签到可能被拒",
+                force=True,
+            )
+            ts_state = "off"
+        else:
+            ts_state = "off"
+        self.log(LogEmoji.INFO, f"challenge 字段: {sorted(k for k in data if k != 'nonce')}, tsState={ts_state}", force=True)
+
         # challenge 到手后等待间隔后再提交
         time.sleep(CHALLENGE_DELAY_SECONDS)
         proof = hashlib.sha256(f"{nonce}.{CHALLENGE_SUFFIX}".encode()).hexdigest()
         self.log(LogEmoji.INFO, "已获取签到 challenge")
-        return str(nonce), proof
+        return str(nonce), proof, ts_state
 
     def _checkin_attempt(self, user_agent: str) -> Optional[Dict]:
         """发起一次签到请求并返回解析后的响应体；请求失败或响应非 JSON 返回 None"""
         payload: Dict[str, str] = {"token": self.domain}  # 官方签到 token 固定值，不随探测命中的域名变化
         challenge = self._checkin_challenge(user_agent)
         if challenge:
-            nonce, proof = challenge
-            payload.update({"nonce": nonce, "proof": proof})
+            nonce, proof, ts_state = challenge
+            payload.update({"nonce": nonce, "proof": proof, "tsState": ts_state})
         else:
             self.log(
                 LogEmoji.WARNING,
