@@ -99,7 +99,7 @@ RUN_BUDGET_SECONDS = 300
 
 """签到 challenge 的 proof 后缀与最小等待（与网页端当前实现一致）"""
 CHALLENGE_SUFFIX = "glados-observe-v1"
-CHALLENGE_DELAY_SECONDS = 2.5
+CHALLENGE_DELAY_SECONDS = 2.7
 
 """Cookie 中标识登录态的会话字段"""
 SESSION_FIELDS = ("koa:sess=", "gld:sess=")
