@@ -974,7 +974,7 @@ class API:
 
     def _checkin_attempt(self, user_agent: str) -> Optional[Dict]:
         """发起一次签到请求并返回解析后的响应体；请求失败或响应非 JSON 返回 None"""
-        payload: Dict[str, str] = {"token": "glados.cloud"}  # 官方签到 token 固定值，不随探测命中的域名变化
+        payload: Dict[str, str] = {"token": self.domain}  # 官方签到 token 固定值，不随探测命中的域名变化
         challenge = self._checkin_challenge(user_agent)
         if challenge:
             nonce, proof = challenge
