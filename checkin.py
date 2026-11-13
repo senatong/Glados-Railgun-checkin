@@ -768,7 +768,7 @@ class API:
             )
 
         self.headers = {"origin": f"https://{domain}", "user-agent": self.user_agent or PLATFORM_UA["Windows"]}
-        self.session = requests.Session()
+        self.headers.update({             "sec-ch-ua": "\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"",             "sec-ch-ua-mobile": "?0",             "sec-ch-ua-platform": "\"Windows\"",         })         self.session = requests.Session()
         self.session.headers.update(self.headers)
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("https://", adapter)
