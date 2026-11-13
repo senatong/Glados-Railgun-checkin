@@ -773,7 +773,33 @@ class API:
                 raise_on_status=False,
             )
 
-        self.headers = {"origin": f"https://{domain}", "user-agent": self.user_agent or PLATFORM_UA["Windows"]}
+        # 浏览器指纹头：Cloudflare 会校验这些头的一致性，缺失会以 code=5 拒绝签到
+        self.headers = {
+            "origin": f"https://{domain}",
+            "referer": f"https://{domain}/console/checkin",
+            "user-agent": self.user_agent or PLATFORM_UA["Windows"],
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin",
+        }
+        ua = self.headers["user-agent"]
+        chrome = re.search(r"(?:Chrome|Chromium)/(\d+)", ua)
+        if chrome:
+            version = chrome.group(1)
+            platform = next(
+                (name for token, name in (
+                    ("Windows", "Windows"), ("Macintosh", "macOS"),
+                    ("Android", "Android"), ("Linux", "Linux"),
+                ) if token in ua),
+                "Unknown",
+            )
+            self.headers.update({
+                "sec-ch-ua": f'"Chromium";v="{version}", "Google Chrome";v="{version}", "Not_A Brand";v="99"',
+                "sec-ch-ua-mobile": "?1" if "Mobile" in ua else "?0",
+                "sec-ch-ua-platform": f'"{platform}"',
+            })
         self.session = requests.Session()
         self.session.headers.update(self.headers)
         adapter = HTTPAdapter(max_retries=retry)
@@ -921,6 +947,31 @@ class API:
 
     # ---------------- 内部实现 ----------------
 
+    @staticmethod
+    def _merge_response_cookies(cookie: str, response: requests.Response) -> str:
+        """把响应 Set-Cookie 合并回 Cookie 头。
+
+        请求中显式传 cookie header 会让 requests 跳过 session 的 cookie jar，
+        服务端在 challenge 阶段下发的会话/验证标记会被静默丢弃，
+        导致签到时服务端报 "Nothing was recorded"。
+        """
+        if not response.cookies:
+            return cookie
+        pairs: Dict[str, str] = {}
+        for item in cookie.split(";"):
+            item = item.strip()
+            if "=" in item:
+                key, value = item.split("=", 1)
+                pairs[key.strip()] = value.strip()
+        changed = False
+        for key, value in response.cookies.items():
+            if pairs.get(key) != value:
+                pairs[key] = value
+                changed = True
+        if not changed:
+            return cookie
+        return "; ".join(f"{k}={v}" for k, v in pairs.items())
+
     def request(
         self,
         method: str,
@@ -936,6 +987,8 @@ class API:
         headers = {**self.headers, "cookie": self.cookie}
         if user_agent:
             headers["user-agent"] = user_agent
+        if method.upper() == "POST" and json_body:
+            headers["content-type"] = "application/json;charset=UTF-8"
 
         try:
             session = self.session if retry else self._no_retry_session
@@ -952,6 +1005,12 @@ class API:
         except requests.exceptions.RequestException as e:
             self.log(LogEmoji.ERROR, f"向 {url} 发起请求时发生网络错误: {e}", force=True)
             return None
+
+        # 保留服务端下发的会话/Cloudflare 验证 Cookie，供后续请求带回
+        merged = self._merge_response_cookies(self.cookie, response)
+        if merged != self.cookie:
+            self.cookie = merged
+            self.log(LogEmoji.INFO, "已合并响应下发的新会话 Cookie")
 
         if not response.ok:
             self._log_failure(url, response)
